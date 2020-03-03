@@ -122,6 +122,10 @@
           }
         }
       }
-    }},
-  "defaultProject": "tst-primeng"
+    }
+  },
+  "defaultProject": "tst-primeng",
+  "cli": {
+    "analytics": "f6dd7f40-0e75-4166-833a-84f064780306"
+  }
 }

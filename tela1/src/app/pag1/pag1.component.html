@@ -1,48 +1,81 @@
 
+<button (click)="openModal(template)">Clque Aqui</button>
 
-<div class="principal">
-  <table>
-    <tr>
-      <td class="img">
-        <img [src]=logo style="width: 100%; max-width: 900px;"/>
-       </td>
-    </tr>
-  </table>
-<section class="summary">
-  <section class="container column">
-  <div class="item"><strong>REPÚBLICA FEDERATIVA DO BRASIL</strong></div>
-  </section>
+<!--Large modal-->
 
-  <section class="container2 col-11">
-   <div class="item1"><strong>NOTA PROMISSÓRIA</strong></div> 
-   <section class="item2">
-     <div>Nº 1988</div>
-     <div>VENCIMENTO: 11 de abril de 2020 </div>
-   </section>
-   <section>
-   <div class="item3">R$ 28,26</div>
-   </section>
-   <section>
-     <div class="item4">No dia Onze do mês de Março do ano de Dois Mil e Vinte, pagarei por esta única via de NOTA PROMISSÓRIA
-      na praça de LONDRINA - PR a NIKOLETTA COMERCIO DE PRATAS LTDA, inscrito no CNPJ nº
-      34.716.739/0001-16 ou à sua ordem a quantida de VINTE E OITO REAIS E VINTE E CINCO CENTAVOS em
-      moeda corrente do país. Local de pagamento: AV PARANA, 343 SALA 605 - SALA 605 - LONDRINA - PR - CEP
-      86010-920</div>
-   </section>
-   <section>
-     <div class="itens">LONDRINA, 11 de fevereiro de 2020</div>
-   </section>
-   <section class="item5">
-     <div><hr id="bar">NOME DO EMITENTE</div>
-     <div><hr id="bar">ASSINATURA DO EMITENTE</div>
-   </section>
-   <section>
-     <div class="itens">CPF: 081.290.739-60</div>
-   </section>
-   <section>
-     <div class="itens">ENDEREÇO: ALAMEDA FLOR DO CAMPO, 112 - LOTEAMENTO MORADA DAS FLORES - CAMBÉ - PR - CEP 86189-432</div>
-    </section>
-  </section>  
 
-</section>
+<div bsModal #template="bs-modal" class="modal fade" tabindex="-1"
+role="dialog" aria-labelledby="dialog-sizes-name1">
+<div class="modal-dialog modal-lg">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h4 id="dialog-sizes-name1" class="modal-title pull-left">NOTA PROMISSÓRIA</h4>
+    </div>
+    <div class="modal-body">
+      
+      
+      <div class="principal">
+        <table>
+          <tr>
+            <td class="img">
+              <img [src]=logo style="width: 90%; max-width: 900px;"/>
+            </td>
+          </tr>
+        </table>
+        <section class="summary">
+          <section class="container column">
+            <div class="item"><strong>REPÚBLICA FEDERATIVA DO BRASIL</strong></div>
+          </section>
+          
+          <section class="container2 col-11">
+            <div class="item1"><strong>NOTA PROMISSÓRIA</strong></div> 
+            <section class="item2">
+              <div>Nº 1988</div>
+              <div>VENCIMENTO: 11 de abril de 2020 </div>
+            </section>
+            <section>
+              <div class="item3">R$ 28,26</div>
+            </section>
+            <section>
+              <div class="item4">No dia Onze do mês de Março do ano de Dois Mil e Vinte, pagarei por esta única via de NOTA PROMISSÓRIA
+                na praça de LONDRINA - PR a NIKOLETTA COMERCIO DE PRATAS LTDA, inscrito no CNPJ nº
+                34.716.739/0001-16 ou à sua ordem a quantida de VINTE E OITO REAIS E VINTE E CINCO CENTAVOS em
+                moeda corrente do país. Local de pagamento: AV PARANA, 343 SALA 605 - SALA 605 - LONDRINA - PR - CEP
+                86010-920</div>
+              </section>
+              <section>
+                <div class="itens">LONDRINA, 11 de fevereiro de 2020</div>
+              </section>
+              <section class="item5">
+                <div><hr id="bar">NOME DO EMITENTE</div>
+                <div><hr id="bar">ASSINATURA DO EMITENTE</div>
+              </section>
+              <section>
+                <div class="itens">CPF: 081.290.739-60</div>
+              </section>
+              <section>
+                <div class="itens">ENDEREÇO: ALAMEDA FLOR DO CAMPO, 112 - LOTEAMENTO MORADA DAS FLORES - CAMBÉ - PR - CEP 86189-432</div>
+              </section>
+            </section>  
+            
+          </section>
+        </div>
+        
+      </div>
+      <div class="modal-footer">
+        <button class="sucess" (click)="openModal(template.hide())">Imprimir</button>
+        <button class="sucess">Fechar</button>
+        <script type="text/javascript">
+          $(document).ready(function () {
+              $("#btnPrint").click(function () {
+                  //get the modal box content and load it into the printable div
+                  $(".printable").html($("#myModal").html());
+                  $(".printable #btnPrint").remove();
+                  $(".printable").printThis();
+              });
+          });
+      </script>
+      </div>
+    </div>
+  </div>
 </div>
