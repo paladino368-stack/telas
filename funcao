@@ -1,0 +1,137 @@
+import os
+import hashlib
+from typing import List, Tuple
+
+def _calcular_hash_arquivo(caminho_arquivo: str) -> str:
+    """
+    Função auxiliar para calcular o hash SHA-256 de um arquivo de forma eficiente.
+    Lê o arquivo em blocos para não sobrecarregar a memória com arquivos grandes.
+    """
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(caminho_arquivo, "rb") as f:
+            # Lê o arquivo em pedaços de 4KB por vez
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+            return sha256_hash.hexdigest()
+    except IOError:
+        # Retorna uma string vazia se o arquivo não puder ser lido
+        return ""
+
+def analisar_diretorios(dir1: str, dir2: str) -> Tuple[bool, List[str]]:
+    """
+    Analisa e compara o conteúdo de dois diretórios para verificar se são idênticos.
+
+    A verificação inclui:
+    1. Se ambos os diretórios contêm os mesmos nomes de arquivos.
+    2. Se os arquivos correspondentes têm o mesmo tamanho.
+    3. Se os arquivos correspondentes têm o mesmo conteúdo binário (via hash SHA-256).
+
+    Args:
+        dir1 (str): O caminho para o primeiro diretório.
+        dir2 (str): O caminho para o segundo diretório.
+
+    Returns:
+        Tuple[bool, List[str]]: 
+            - Um booleano `True` se os diretórios forem idênticos, `False` caso contrário.
+            - Uma lista de strings (`relatorio`) descrevendo as diferenças encontradas.
+              Se forem idênticos, a lista conterá uma única mensagem de sucesso.
+    """
+    relatorio = []
+    
+    # Validação inicial dos caminhos
+    if not os.path.isdir(dir1):
+        return False, [f"ERRO: O diretório '{dir1}' não existe."]
+    if not os.path.isdir(dir2):
+        return False, [f"ERRO: O diretório '{dir2}' não existe."]
+
+    # 1. Comparar a lista de arquivos (ignorando subdiretórios por enquanto)
+    arquivos_dir1 = set(f for f in os.listdir(dir1) if os.path.isfile(os.path.join(dir1, f)))
+    arquivos_dir2 = set(f for f in os.listdir(dir2) if os.path.isfile(os.path.join(dir2, f)))
+
+    # Arquivos que existem apenas no dir1
+    apenas_em_dir1 = arquivos_dir1 - arquivos_dir2
+    for arquivo in apenas_em_dir1:
+        relatorio.append(f"ARQUIVO AUSENTE em '{dir2}': {arquivo}")
+
+    # Arquivos que existem apenas no dir2
+    apenas_em_dir2 = arquivos_dir2 - arquivos_dir1
+    for arquivo in apenas_em_dir2:
+        relatorio.append(f"ARQUIVO EXTRA em '{dir2}': {arquivo}")
+
+    # 2. Comparar arquivos que existem em ambos os diretórios
+    arquivos_comuns = arquivos_dir1.intersection(arquivos_dir2)
+
+    for nome_arquivo in sorted(list(arquivos_comuns)):
+        caminho1 = os.path.join(dir1, nome_arquivo)
+        caminho2 = os.path.join(dir2, nome_arquivo)
+
+        # Verificação de Tamanho (rápida e eficiente)
+        tamanho1 = os.path.getsize(caminho1)
+        tamanho2 = os.path.getsize(caminho2)
+
+        if tamanho1 != tamanho2:
+            relatorio.append(f"TAMANHO DIFERENTE: {nome_arquivo} (Dir1: {tamanho1} bytes, Dir2: {tamanho2} bytes)")
+            continue  # Pula para o próximo arquivo, já que são diferentes
+
+        # Verificação de Conteúdo Binário via Hash (a prova final)
+        # Nota: A contagem de caracteres é implicitamente verificada pelo tamanho e pelo hash.
+        # Um hash diferente significa que o conteúdo (e, portanto, os caracteres) é diferente.
+        hash1 = _calcular_hash_arquivo(caminho1)
+        hash2 = _calcular_hash_arquivo(caminho2)
+
+        if hash1 != hash2:
+            relatorio.append(f"CONTEÚDO DIFERENTE (HASH): {nome_arquivo}")
+
+    if not relatorio:
+        return True, ["SUCESSO: Os diretórios são idênticos em seu conteúdo de arquivos."]
+    else:
+        return False, relatorio
+
+
+### Exemplo de Uso Prático
+
+Abaixo está um exemplo completo de como você pode usar essa função. Ele cria diretórios e arquivos de teste para demonstrar os diferentes tipos de divergências que a função pode encontrar.
+
+```python
+import shutil
+
+# --- PREPARAÇÃO DO AMBIENTE DE TESTE ---
+# Criar diretórios de exemplo
+os.makedirs("diretorio_A", exist_ok=True)
+os.makedirs("diretorio_B", exist_ok=True)
+
+# 1. Arquivo idêntico em ambos
+with open("diretorio_A/relatorio.xlsx", "w") as f:
+    f.write("dados_planilha_123")
+shutil.copy("diretorio_A/relatorio.xlsx", "diretorio_B/relatorio.xlsx")
+
+# 2. Arquivo apenas no diretório A
+with open("diretorio_A/documento.txt", "w") as f:
+    f.write("este arquivo é único.")
+
+# 3. Arquivo apenas no diretório B
+with open("diretorio_B/log_extra.csv", "w") as f:
+    f.write("um,log,extra")
+
+# 4. Arquivo com mesmo nome, mas conteúdo e tamanho diferentes
+with open("diretorio_A/config.ini", "w") as f:
+    f.write("user=admin")
+with open("diretorio_B/config.ini", "w") as f:
+    f.write("user=guest\npassword=123") # Conteúdo diferente
+
+# --- EXECUÇÃO DA ANÁLISE ---
+print("Analisando diretórios 'diretorio_A' e 'diretorio_B'...")
+sao_identicos, resultado_analise = analisar_diretorios("diretorio_A", "diretorio_B")
+
+# --- EXIBIÇÃO DO RESULTADO ---
+if sao_identicos:
+    print("\n✅ Verificação concluída: Os diretórios são idênticos.")
+else:
+    print("\n❌ Verificação concluída: Foram encontradas diferenças:")
+    for item in resultado_analise:
+        print(f"   - {item}")
+
+# --- LIMPEZA DO AMBIENTE DE TESTE ---
+shutil.rmtree("diretorio_A")
+shutil.rmtree("diretorio_B")
