@@ -1,68 +1,50 @@
 import pandas as pd
 import os
 from difflib import SequenceMatcher
-from typing import Tuple
+from typing import Any
 
-def _carregar_dataframe(caminho_arquivo: str) -> pd.DataFrame:
-    """Função auxiliar para carregar um arquivo CSV ou Excel em um DataFrame."""
-    print(f"🔄 Carregando arquivo: {os.path.basename(caminho_arquivo)}...")
+# -----------------------------------------------------------------------------
+# FUNÇÕES AUXILIARES (LÓGICA INTERNA)
+# -----------------------------------------------------------------------------
+
+def _carregar_dataframe(caminho_arquivo: str, sheet_name: Any = 0) -> pd.DataFrame:
+    """
+    Carrega dinamicamente um arquivo (CSV ou Excel) em um DataFrame do Pandas.
+    Para Excel, permite a especificação da planilha.
+    """
+    extensao = os.path.splitext(caminho_arquivo)[1].lower()
+    print(f"\n🔄 Carregando arquivo: '{os.path.basename(caminho_arquivo)}' (extensão: {extensao})")
+
     try:
-        if caminho_arquivo.lower().endswith('.csv'):
+        if extensao == '.csv':
             return pd.read_csv(caminho_arquivo)
-        elif caminho_arquivo.lower().endswith('.xlsx'):
-            return pd.read_excel(caminho_arquivo)
+        elif extensao == '.xlsx':
+            # Permite carregar uma planilha específica
+            return pd.read_excel(caminho_arquivo, sheet_name=sheet_name)
         else:
-            raise ValueError("Formato de arquivo não suportado. Use .csv ou .xlsx")
+            raise ValueError(f"Extensão '{extensao}' não suportada. Use .csv ou .xlsx")
     except FileNotFoundError:
         raise FileNotFoundError(f"ERRO: O arquivo '{caminho_arquivo}' não foi encontrado.")
     except Exception as e:
         raise Exception(f"ERRO ao ler o arquivo '{caminho_arquivo}': {e}")
 
-def analisador_de_similaridade(
-    caminho_arquivo1: str,
-    caminho_arquivo2: str,
+def _calcular_similaridade(
+    df1: pd.DataFrame,
+    df2: pd.DataFrame,
     coluna_numerica_obrigatoria: str,
     peso_estrutura: float = 0.3,
     peso_conteudo: float = 0.7
 ) -> float:
     """
-    Analisa dois arquivos tabulares e calcula um percentual de similaridade.
-
-    A análise é baseada na estrutura (linhas/colunas) e no conteúdo (célula a célula),
-    com tratamento especial para uma coluna numérica de correspondência obrigatória.
-
-    Args:
-        caminho_arquivo1 (str): Caminho para o primeiro arquivo.
-        caminho_arquivo2 (str): Caminho para o segundo arquivo.
-        coluna_numerica_obrigatoria (str): Nome da coluna onde os números devem ser idênticos.
-        peso_estrutura (float): O peso da similaridade estrutural na pontuação final (padrão 0.3).
-        peso_conteudo (float): O peso da similaridade de conteúdo na pontuação final (padrão 0.7).
-
-    Returns:
-        float: O percentual final de similaridade entre os dois arquivos.
+    Recebe dois DataFrames e calcula a similaridade ponderada entre eles.
+    Esta é a função de cálculo principal.
     """
-    print("======================================================")
-    print("🚀 INICIANDO ANÁLISE DE SIMILARIDADE DE ARQUIVOS 🚀")
-    print("======================================================")
-
-    try:
-        df1 = _carregar_dataframe(caminho_arquivo1)
-        df2 = _carregar_dataframe(caminho_arquivo2)
-    except Exception as e:
-        print(e)
-        return 0.0
-
     # --- 1. ANÁLISE ESTRUTURAL ---
     print("\n---------- ETAPA 1: ANÁLISE ESTRUTURAL ----------")
     shape1 = df1.shape
     shape2 = df2.shape
     print(f"Dimensões Arquivo 1: {shape1[0]} linhas, {shape1[1]} colunas.")
     print(f"Dimensões Arquivo 2: {shape2[0]} linhas, {shape2[1]} colunas.")
-
-    # Validar se a coluna obrigatória existe em ambos
-    if coluna_numerica_obrigatoria not in df1.columns or coluna_numerica_obrigatoria not in df2.columns:
-        print(f"❌ ERRO CRÍTICO: A coluna '{coluna_numerica_obrigatoria}' não foi encontrada em ambos os arquivos.")
-        return 0.0
 
     sim_linhas = min(shape1[0], shape2[0]) / max(shape1[0], shape2[0]) if max(shape1[0], shape2[0]) > 0 else 1.0
     sim_colunas = min(shape1[1], shape2[1]) / max(shape1[1], shape2[1]) if max(shape1[1], shape2[1]) > 0 else 1.0
@@ -76,35 +58,29 @@ def analisador_de_similaridade(
     print("\n---------- ETAPA 2: ANÁLISE DE CONTEÚDO ----------")
     print(f"Verificando correspondência exata na coluna: '{coluna_numerica_obrigatoria}'")
     print("Calculando similaridade de texto para as demais colunas...")
-
+    
     scores_celulas = []
-    # Usar o menor número de linhas e colunas para evitar erros de índice
     linhas_para_comparar = min(shape1[0], shape2[0])
     colunas_para_comparar = min(shape1[1], shape2[1])
 
-    if linhas_para_comparar == 0 or colunas_para_comparar == 0:
-        score_conteudo = 0.0
-    else:
+    if linhas_para_comparar > 0 and colunas_para_comparar > 0:
         for i in range(linhas_para_comparar):
             for j in range(colunas_para_comparar):
                 coluna_atual = df1.columns[j]
                 val1 = df1.iloc[i, j]
                 val2 = df2.iloc[i, j]
-
-                # Tratar valores nulos/vazios para evitar erros
                 s_val1 = str(val1) if pd.notna(val1) else ""
                 s_val2 = str(val2) if pd.notna(val2) else ""
 
                 if coluna_atual == coluna_numerica_obrigatoria:
-                    # Comparação exata para a coluna numérica chave
                     score_celula = 1.0 if s_val1 == s_val2 else 0.0
                 else:
-                    # Comparação de similaridade de texto para outras colunas
                     score_celula = SequenceMatcher(None, s_val1, s_val2).ratio()
-                
                 scores_celulas.append(score_celula)
         
         score_conteudo = sum(scores_celulas) / len(scores_celulas) if scores_celulas else 1.0
+    else:
+        score_conteudo = 0.0
 
     print(f"📝 Pontuação de Similaridade de Conteúdo: {score_conteudo:.2%}")
 
@@ -113,48 +89,106 @@ def analisador_de_similaridade(
     print(f"Pesos aplicados -> Estrutura: {peso_estrutura:.0%}, Conteúdo: {peso_conteudo:.0%}")
     
     similaridade_final = (score_estrutura * peso_estrutura) + (score_conteudo * peso_conteudo)
-    
-    print("\n======================================================")
-    print(f"🏆 SIMILARIDADE FINAL CALCULADA: {similaridade_final:.2%}")
-    print("======================================================")
-    
     return similaridade_final
+
+# -----------------------------------------------------------------------------
+# FUNÇÃO PRINCIPAL (INTERFACE COM O USUÁRIO)
+# -----------------------------------------------------------------------------
+
+def comparador_dinamico_arquivos(
+    caminho_arquivo1: str,
+    caminho_arquivo2: str,
+    sheet1: Any = 0,
+    sheet2: Any = 0
+):
+    """
+    Orquestra a comparação dinâmica e interativa de dois arquivos.
+    """
+    print("======================================================")
+    print("🚀 INICIANDO COMPARADOR DINÂMICO DE ARQUIVOS 🚀")
+    print("======================================================")
+
+    try:
+        # Carregamento e análise dinâmica inicial
+        df1 = _carregar_dataframe(caminho_arquivo1, sheet_name=sheet1)
+        print("🔍 Colunas detectadas no Arquivo 1:")
+        print(f"   {df1.columns.tolist()}")
+
+        df2 = _carregar_dataframe(caminho_arquivo2, sheet_name=sheet2)
+        print("🔍 Colunas detectadas no Arquivo 2:")
+        print(f"   {df2.columns.tolist()}")
+
+        # Identificar colunas em comum para o usuário escolher
+        colunas_comuns = sorted(list(set(df1.columns) & set(df2.columns)))
+        
+        if not colunas_comuns:
+            print("\n❌ ERRO CRÍTICO: Nenhum nome de coluna em comum encontrado entre os arquivos.")
+            return
+
+        print("\n------------------------------------------------------")
+        print("Selecione a coluna chave para comparação numérica:")
+        for idx, col in enumerate(colunas_comuns):
+            print(f"  [{idx}] {col}")
+        
+        coluna_escolhida = None
+        while coluna_escolhida is None:
+            try:
+                escolha = int(input("Digite o número da coluna desejada: "))
+                if 0 <= escolha < len(colunas_comuns):
+                    coluna_escolhida = colunas_comuns[escolha]
+                else:
+                    print("Opção inválida. Tente novamente.")
+            except (ValueError, IndexError):
+                print("Entrada inválida. Digite apenas o número correspondente.")
+        
+        print(f"✅ Coluna chave selecionada: '{coluna_escolhida}'")
+        print("------------------------------------------------------")
+        
+        # Executar o cálculo com os dados carregados e a coluna escolhida
+        similaridade_final = _calcular_similaridade(df1, df2, coluna_escolhida)
+        
+        print("\n======================================================")
+        print(f"🏆 SIMILARIDADE FINAL CALCULADA: {similaridade_final:.2%}")
+        print("======================================================")
+
+    except (ValueError, FileNotFoundError, Exception) as e:
+        print(f"\n❌ A análise foi interrompida devido a um erro: {e}")
 
 ### Exemplo de Uso Prático
 
-Vamos criar dois arquivos CSV de exemplo para testar a função.
+Vamos criar um arquivo `.csv` e um `.xlsx` para demonstrar a flexibilidade total.
 
 ```python
 # --- PREPARAÇÃO DO AMBIENTE DE TESTE ---
-
-# Arquivo 1: A nossa base
-dados_a = {
-    'ID_VENDA': [1001, 1002, 1003, 1004],
-    'CLIENTE': ['Tech Solutions Ltda', 'Inova Corp', 'Mercado Central', 'Papelaria Folha Branca'],
-    'DESCRICAO': ['Compra de 10x monitores LED 24"', 'Serviço de consultoria em TI', 'Aquisição de 50x teclados ABNT2', 'Pacote com 1000 folhas A4'],
-    'VALOR': [5000.00, 3500.00, 1500.00, 250.00]
+# Criando um arquivo CSV
+dados_csv = {
+    'COD_PRODUTO': [101, 102, 103, 104],
+    'DESCRICAO': ['Mouse Gamer RGB', 'Teclado Mecanico ABNT2', 'Monitor LED 27 polegadas', 'Headset Pro 7.1'],
+    'ESTOQUE': [150, 80, 50, 120]
 }
-df_a = pd.DataFrame(dados_a)
-df_a.to_csv("vendas_mes_1.csv", index=False)
+df_csv = pd.DataFrame(dados_csv)
+df_csv.to_csv("estoque_sistema.csv", index=False)
 
-# Arquivo 2: Versão com pequenas diferenças
-dados_b = {
-    'ID_VENDA': [1001, 1002, 1003, 1005], # ID 1004 alterado para 1005
-    'CLIENTE': ['Tech Solutions LTDA', 'Inova Corp', 'Mercado Central', 'Distribuidora Papel Total'], # 'Ltda' -> 'LTDA', um cliente mudou
-    'DESCRICAO': ['Compra de 10 monitores de LED 24 polegadas', 'Serviço de consultoria em TI', 'Aquisição de 50 teclados ABNT 2', 'Pacote com 500 folhas A4'], # Textos levemente alterados
-    'VALOR': [5000.00, 3500.00, 1500.00, 125.00]
+# Criando um arquivo Excel com dados similares
+dados_excel = {
+    'COD_PRODUTO': [101, 102, 103, 105], # Um código diferente
+    'DESCRICAO': ['Mouse Gamer com RGB', 'Teclado Mecanico (formato ABNT2)', 'Monitor de LED 27pol', 'Headset Gamer 7.1 Surround'], # Descrições similares
+    'ESTOQUE': [150, 79, 50, 90] # Estoque um pouco diferente
 }
-df_b = pd.DataFrame(dados_b)
-df_b.to_csv("vendas_mes_2.csv", index=False)
+df_excel = pd.DataFrame(dados_excel)
+# Salva na planilha padrão (índice 0)
+df_excel.to_excel("relatorio_fornecedor.xlsx", index=False, sheet_name="Dados")
+
 
 # --- EXECUÇÃO DA ANÁLISE ---
-# Apontamento manual dos arquivos e da coluna chave
-arquivo1 = "vendas_mes_1.csv"
-arquivo2 = "vendas_mes_2.csv"
-coluna_chave = "ID_VENDA"
+# Apontamento manual dos arquivos.
+# Para o Excel, poderíamos especificar a planilha com sheet2="Dados" ou sheet2=0.
+# Se não especificarmos, ele pega a primeira por padrão.
+arquivo_csv = "estoque_sistema.csv"
+arquivo_excel = "relatorio_fornecedor.xlsx"
 
-similaridade = analisador_de_similaridade(arquivo1, arquivo2, coluna_chave)
+comparador_dinamico_arquivos(arquivo_csv, arquivo_excel)
 
 # --- LIMPEZA DO AMBIENTE ---
-os.remove(arquivo1)
-os.remove(arquivo2)
+os.remove(arquivo_csv)
+os.remove(arquivo_excel)
