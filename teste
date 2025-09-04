@@ -37,7 +37,6 @@ def comparador_avancado_arquivos(
     peso_estrutura: float = 0.3,
     peso_colunas: float = 0.4,
     peso_conteudo: float = 0.3,
-    # ALTERAÇÃO: Adicionado parâmetro para limitar a análise de conteúdo
     limite_linhas_conteudo: int = 10000
 ) -> float:
     """
@@ -98,7 +97,6 @@ def comparador_avancado_arquivos(
         
         linhas_para_comparar = min(len(df1_comp), len(df2_comp))
 
-        # ALTERAÇÃO: Aplicar o limite de linhas para a análise de conteúdo
         if limite_linhas_conteudo and linhas_para_comparar > limite_linhas_conteudo:
             print(f"⚠️ Para otimização de performance, o conteúdo será analisado com base nas primeiras {limite_linhas_conteudo} linhas.")
             linhas_para_comparar = limite_linhas_conteudo
@@ -107,7 +105,6 @@ def comparador_avancado_arquivos(
         
         print(f"Comparando o conteúdo de {linhas_para_comparar} linhas nas {len(colunas_comuns)} colunas em comum...")
 
-        # ALTERAÇÃO: "Fast Path" - Verificação rápida de igualdade total da amostra
         if df1_comp.equals(df2_comp):
             print("⚡️ Verificação rápida: O conteúdo da amostra analisada é 100% idêntico.")
             score_conteudo = 1.0
@@ -115,6 +112,13 @@ def comparador_avancado_arquivos(
             scores_celulas = []
             if linhas_para_comparar > 0:
                 for i in range(linhas_para_comparar):
+                    # CORREÇÃO: Exibir progresso apenas no terminal, sem poluir o log.
+                    # Usamos sys.stdout.terminal.write para acessar o console original.
+                    # O '\r' no final faz com que a linha seja reescrita, criando um efeito de progresso.
+                    percentual = (i + 1) / linhas_para_comparar
+                    barra_progresso = '█' * int(percentual * 20)
+                    sys.stdout.terminal.write(f"  Analisando conteúdo: [{barra_progresso:<20}] {percentual:.1%} - linha {i+1}/{linhas_para_comparar}\r")
+                    
                     for col in colunas_comuns:
                         val1 = df1_comp.at[i, col]
                         val2 = df2_comp.at[i, col]
@@ -124,6 +128,9 @@ def comparador_avancado_arquivos(
                         score_celula = SequenceMatcher(None, s_val1, s_val2).ratio()
                         scores_celulas.append(score_celula)
                 
+                # CORREÇÃO: Após o loop, imprime uma linha em branco no terminal para "limpar" a barra de progresso.
+                sys.stdout.terminal.write("\n")
+
                 if scores_celulas:
                     score_conteudo = sum(scores_celulas) / len(scores_celulas)
 
@@ -175,10 +182,7 @@ def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
         caminho_completo = os.path.join(caminho_dir, nome_arquivo)
         if os.path.isfile(caminho_completo) and (nome_arquivo.endswith('.csv') or nome_arquivo.endswith('.xlsx')):
             try:
-                # Otimização: ler apenas o cabeçalho para obter as colunas rapidamente
                 df_header_only = _carregar_dataframe_silencioso(caminho_completo, ler_apenas_cabecalho=True)
-                # Para o shape, ainda precisamos de uma leitura mais completa, mas podemos otimizar se necessário
-                # Por agora, mantemos a leitura completa para o shape, pois a otimização principal está na comparação
                 df_full = _carregar_dataframe_silencioso(caminho_completo)
                 metadados.append({
                     "caminho": caminho_completo,
@@ -318,7 +322,6 @@ def _executar_e_resumir_comparacoes(pares: List, nao_pareados_a: List, nao_parea
         print("\nNenhum par de arquivos foi encontrado para comparação detalhada.")
     else:
         for caminho1, caminho2 in pares:
-            # ALTERAÇÃO: Passando o limite de linhas para a função de comparação
             similaridade = comparador_avancado_arquivos(caminho1, caminho2, limite_linhas_conteudo=limite_linhas)
             resultados_finais[f"{os.path.basename(caminho1)} (de '{os.path.basename(os.path.dirname(caminho1))}') vs {os.path.basename(caminho2)}"] = similaridade
             print("\n\n")
@@ -360,12 +363,9 @@ if __name__ == '__main__':
     # --- CONTROLES GLOBAIS ---
     
     # 1. ESCOLHA O CENÁRIO DE EXECUÇÃO
-    # Altere para True para usar o cenário de "PASTA COMO CHAVE"
     USAR_CENARIO_PASTA_COMO_CHAVE = False
 
-    # 2. CONTROLE DE PERFORMANCE (AQUI VOCÊ AJUSTA A VELOCIDADE)
-    # Defina o número de linhas para a amostragem de conteúdo.
-    # Use None para analisar TODAS as linhas (lento para arquivos grandes).
+    # 2. CONTROLE DE PERFORMANCE
     LIMITE_DE_LINHAS_PARA_ANALISE = 10000
 
     # Configuração do Logger
@@ -384,15 +384,31 @@ if __name__ == '__main__':
 
     if USAR_CENARIO_PASTA_COMO_CHAVE:
         print("MODO DE EXECUÇÃO: Cenário PASTA-COMO-CHAVE selecionado.")
-        # ... (código de setup do cenário 2 permanece o mesmo) ...
         dir_a = "dir_a_cenario2"
         dir_b = "dir_b_cenario2"
-        # ... (código de criação de arquivos permanece o mesmo) ...
+        os.makedirs(dir_a, exist_ok=True)
+        os.makedirs(dir_b, exist_ok=True)
+        os.makedirs(os.path.join(dir_a, "T_account"), exist_ok=True)
+        os.makedirs(os.path.join(dir_a, "T_product"), exist_ok=True)
+        os.makedirs(os.path.join(dir_a, "T_sales_unmatched"), exist_ok=True)
+        df_account = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B']})
+        df_product = pd.DataFrame({'sku': ['X1', 'Y2'], 'price': [100, 200]})
+        df_sales = pd.DataFrame({'date': ['2025-01-01'], 'value': [500]})
+        df_supplier = pd.DataFrame({'cnpj': ['11.222.333/0001-44']})
+        df_account.to_csv(os.path.join(dir_a, "T_account", "gdfsdf-random-name.csv"), index=False)
+        df_product.to_excel(os.path.join(dir_a, "T_product", "data.xlsx"), index=False)
+        df_sales.to_csv(os.path.join(dir_a, "T_sales_unmatched", "report.csv"), index=False)
+        df_account.to_csv(os.path.join(dir_b, "T_account.csv"), index=False)
+        df_product.to_excel(os.path.join(dir_b, "T_product.xlsx"), index=False)
+        df_supplier.to_csv(os.path.join(dir_b, "T_supplier_unmatched.csv"), index=False)
+        
+        print(f"Diretório A: {dir_a}")
+        print(f"Diretório B: {dir_b}")
+        print("Ambiente de teste configurado.\n")
         processar_comparacao_cenario_pasta_chave(dir_a, dir_b, limite_linhas=LIMITE_DE_LINHAS_PARA_ANALISE)
 
     else:
         print("MODO DE EXECUÇÃO: Cenário PADRÃO (similaridade de estrutura) selecionado.")
-        # ... (código de setup do cenário 1 permanece o mesmo) ...
         dir_a = "diretorio_A_cenario1"
         dir_b = "diretorio_B_cenario1"
         os.makedirs(dir_a, exist_ok=True)
