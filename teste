@@ -1,7 +1,13 @@
 import pandas as pd
 import os
+import sys
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, List, Tuple, Dict
+from datetime import datetime
+
+# ==============================================================================
+# BLOCO ORIGINAL (INTOCADO, CONFORME SOLICITADO)
+# ==============================================================================
 
 def _carregar_dataframe(caminho_arquivo: str, sheet_name: Any = 0) -> pd.DataFrame:
     """
@@ -53,7 +59,7 @@ def comparador_avancado_arquivos(
         float: O percentual final de similaridade entre os dois arquivos.
     """
     print("======================================================")
-    print("🚀 INICIANDO COMPARADOR AVANÇADO DE ARQUIVOS 🚀")
+    print(f"🚀 INICIANDO COMPARAÇÃO AVANÇADA ENTRE '{os.path.basename(caminho_arquivo1)}' E '{os.path.basename(caminho_arquivo2)}' 🚀")
     print("======================================================")
     
     try:
@@ -138,3 +144,218 @@ def comparador_avancado_arquivos(
     print("======================================================")
     
     return similaridade_final
+
+# ==============================================================================
+# BLOCO NOVO: ORQUESTRAÇÃO, PAREAMENTO E LOGGING
+# ==============================================================================
+
+class Logger(object):
+    """
+    Classe para redirecionar a saída (stdout) para um arquivo de log e para o terminal.
+    """
+    def __init__(self, nome_arquivo="log_comparacao.txt"):
+        self.terminal = sys.stdout
+        self.log = open(nome_arquivo, "w", encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
+    """
+    Lê um diretório e extrai metadados (caminho, forma, colunas) de cada arquivo.
+    """
+    metadados = []
+    print(f"\n🔎 Analisando metadados do diretório: '{caminho_dir}'")
+    for nome_arquivo in os.listdir(caminho_dir):
+        caminho_completo = os.path.join(caminho_dir, nome_arquivo)
+        if os.path.isfile(caminho_completo) and (nome_arquivo.endswith('.csv') or nome_arquivo.endswith('.xlsx')):
+            try:
+                # Usamos uma função de carregamento silenciosa para não poluir o log de metadados
+                df = _carregar_dataframe_silencioso(caminho_completo)
+                metadados.append({
+                    "caminho": caminho_completo,
+                    "shape": df.shape,
+                    "colunas": set(df.columns)
+                })
+                print(f"  - Metadados de '{nome_arquivo}' extraídos com sucesso.")
+            except Exception as e:
+                print(f"  - ❌ Falha ao ler metadados de '{nome_arquivo}': {e}")
+    return metadados
+
+def _carregar_dataframe_silencioso(caminho_arquivo: str) -> pd.DataFrame:
+    """Versão simplificada para carregar DF sem imprimir na tela."""
+    extensao = os.path.splitext(caminho_arquivo)[1].lower()
+    if extensao == '.csv':
+        return pd.read_csv(caminho_arquivo, low_memory=False)
+    elif extensao == '.xlsx':
+        return pd.read_excel(caminho_arquivo)
+    raise ValueError("Extensão não suportada.")
+
+
+def encontrar_pares_de_arquivos(
+    meta_dir_a: List[Dict[str, Any]],
+    meta_dir_b: List[Dict[str, Any]],
+    limiar_similaridade_previa: float = 0.75
+) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
+    """
+    Encontra os melhores pares de arquivos entre dois diretórios com base na similaridade
+    de estrutura (dimensões) e nomes de colunas.
+    """
+    print("\n🤝 Iniciando o processo de pareamento de arquivos entre os diretórios...")
+    
+    pares_encontrados = []
+    arquivos_b_disponiveis = meta_dir_b[:]
+    arquivos_a_pareados = set()
+
+    for meta_a in meta_dir_a:
+        melhor_par = None
+        maior_score = -1
+
+        for meta_b in arquivos_b_disponiveis:
+            # Calcular similaridade de colunas (Jaccard)
+            intersecao = len(meta_a["colunas"].intersection(meta_b["colunas"]))
+            uniao = len(meta_a["colunas"].union(meta_b["colunas"]))
+            score_colunas = intersecao / uniao if uniao > 0 else 0.0
+
+            # Calcular similaridade de dimensões (shape)
+            shape_a = meta_a["shape"]
+            shape_b = meta_b["shape"]
+            sim_colunas_total = min(shape_a[1], shape_b[1]) / max(shape_a[1], shape_b[1]) if max(shape_a[1], shape_b[1]) > 0 else 1.0
+            
+            # Score combinado: A similaridade das colunas é mais importante para a identidade do arquivo.
+            score_combinado = (score_colunas * 0.7) + (sim_colunas_total * 0.3)
+
+            if score_combinado > maior_score:
+                maior_score = score_combinado
+                melhor_par = meta_b
+
+        if melhor_par and maior_score >= limiar_similaridade_previa:
+            pares_encontrados.append((meta_a["caminho"], melhor_par["caminho"]))
+            arquivos_a_pareados.add(meta_a["caminho"])
+            arquivos_b_disponiveis.remove(melhor_par)
+            print(f"  - Par encontrado: '{os.path.basename(meta_a['caminho'])}' <=> '{os.path.basename(melhor_par['caminho'])}' (Score prévio: {maior_score:.2%})")
+
+    # Identificar arquivos que não foram pareados
+    nao_pareados_a = [meta["caminho"] for meta in meta_dir_a if meta["caminho"] not in arquivos_a_pareados]
+    nao_pareados_b = [meta["caminho"] for meta in arquivos_b_disponiveis]
+
+    return pares_encontrados, nao_pareados_a, nao_pareados_b
+
+
+def processar_comparacao_entre_diretorios(dir_a: str, dir_b: str):
+    """
+    Função principal que orquestra todo o processo de comparação entre dois diretórios.
+    """
+    # Configura o logger
+    nome_log = f"log_comparacao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    sys.stdout = Logger(nome_log)
+    
+    print("######################################################")
+    print("### INÍCIO DA EXECUÇÃO DO COMPARADOR DE DIRETÓRIOS ###")
+    print("######################################################\n")
+    print(f"Diretório A: {dir_a}")
+    print(f"Diretório B: {dir_b}")
+    print(f"Log sendo salvo em: {nome_log}\n")
+
+    # Etapa 1: Extrair metadados de ambos os diretórios
+    metadados_a = _analisar_metadados_diretorio(dir_a)
+    metadados_b = _analisar_metadados_diretorio(dir_b)
+
+    # Etapa 2: Encontrar os pares correspondentes
+    pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos(metadados_a, metadados_b)
+
+    # Etapa 3: Executar a comparação avançada para cada par
+    print("\n\n######################################################")
+    print("###     INICIANDO COMPARAÇÕES DETALHADAS     ###")
+    print("######################################################")
+    
+    resultados_finais = {}
+    if not pares:
+        print("\nNenhum par de arquivos foi encontrado para comparação detalhada.")
+    else:
+        for caminho1, caminho2 in pares:
+            similaridade = comparador_avancado_arquivos(caminho1, caminho2)
+            resultados_finais[f"{os.path.basename(caminho1)} vs {os.path.basename(caminho2)}"] = similaridade
+            print("\n\n") # Espaçamento entre as comparações
+
+    # Etapa 4: Apresentar o resumo final no log
+    print("\n\n######################################################")
+    print("###              RESUMO DA EXECUÇÃO              ###")
+    print("######################################################\n")
+    
+    print("--- Resultados das Comparações ---")
+    if resultados_finais:
+        for par, score in resultados_finais.items():
+            print(f"- {par}: {score:.2%}")
+    else:
+        print("Nenhuma comparação foi executada.")
+        
+    print("\n--- Arquivos Sem Par no Diretório A ---")
+    if nao_pareados_a:
+        for arq in nao_pareados_a:
+            print(f"- {os.path.basename(arq)}")
+    else:
+        print("Todos os arquivos do Diretório A foram pareados.")
+
+    print("\n--- Arquivos Sem Par no Diretório B ---")
+    if nao_pareados_b:
+        for arq in nao_pareados_b:
+            print(f"- {os.path.basename(arq)}")
+    else:
+        print("Todos os arquivos do Diretório B foram pareados.")
+        
+    print("\n\n######################################################")
+    print("###           EXECUÇÃO FINALIZADA                ###")
+    print("######################################################")
+
+# ==============================================================================
+# BLOCO DE EXECUÇÃO E EXEMPLO
+# ==============================================================================
+if __name__ == '__main__':
+    # --- Criação de um ambiente de teste com diretórios e arquivos de exemplo ---
+    print("Configurando ambiente de teste...")
+    
+    # Criando diretórios
+    dir_a = "diretorio_A"
+    dir_b = "diretorio_B"
+    os.makedirs(dir_a, exist_ok=True)
+    os.makedirs(dir_b, exist_ok=True)
+
+    # Criando DataFrames de exemplo
+    df_clientes_orig = pd.DataFrame({
+        'ID_Cliente': [101, 102, 103, 104],
+        'Nome': ['Alice', 'Bruno', 'Carlos', 'Diana'],
+        'Idade': [34, 25, 45, 29]
+    })
+    
+    df_clientes_novo_nome = df_clientes_orig.copy()
+    df_clientes_novo_nome.at[2, 'Nome'] = 'Carla' # Pequena alteração no conteúdo
+
+    df_produtos = pd.DataFrame({
+        'SKU': ['A-001', 'B-002', 'C-003'],
+        'Produto': ['Notebook', 'Mouse', 'Teclado'],
+        'Preco': [4500.00, 150.50, 299.90]
+    })
+    
+    df_vendas_a = pd.DataFrame({'Data': ['2025-01-10'], 'Valor': [1000]})
+    df_fornecedores_b = pd.DataFrame({'CNPJ': ['123456/0001-00'], 'Empresa': ['Fornecedor X']})
+
+    # Salvando os arquivos com nomes diferentes nos diretórios
+    df_clientes_orig.to_csv(os.path.join(dir_a, "base_clientes_jan.csv"), index=False)
+    df_produtos.to_excel(os.path.join(dir_a, "catalogo_produtos.xlsx"), index=False)
+    df_vendas_a.to_csv(os.path.join(dir_a, "relatorio_vendas.csv"), index=False) # Arquivo sem par
+
+    df_clientes_novo_nome.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
+    df_produtos.to_excel(os.path.join(dir_b, "product_catalog_v2.xlsx"), index=False)
+    df_fornecedores_b.to_csv(os.path.join(dir_b, "dados_fornecedores.csv"), index=False) # Arquivo sem par
+
+    print("Ambiente de teste configurado.\n")
+    
+    # --- Execução da função principal ---
+    # A partir daqui, toda a saída será capturada pelo logger
+    processar_comparacao_entre_diretorios(dir_a, dir_b)
