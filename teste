@@ -19,15 +19,45 @@ def _carregar_dataframe(caminho_arquivo: str, sheet_name: Any = 0) -> pd.DataFra
 
     try:
         if extensao == '.csv':
-            return pd.read_csv(caminho_arquivo, low_memory=False)
+            return pd.read_csv(caminho_arquivo, low_memory=False, dtype=str)
         elif extensao == '.xlsx':
-            return pd.read_excel(caminho_arquivo, sheet_name=sheet_name)
+            return pd.read_excel(caminho_arquivo, sheet_name=sheet_name, dtype=str)
         else:
             raise ValueError(f"Extensão '{extensao}' não suportada. Use .csv ou .xlsx")
     except FileNotFoundError:
         raise FileNotFoundError(f"ERRO: O arquivo '{caminho_arquivo}' não foi encontrado.")
     except Exception as e:
         raise Exception(f"ERRO ao ler o arquivo '{caminho_arquivo}': {e}")
+
+# NOVA FUNÇÃO AUXILIAR PARA NORMALIZAÇÃO DE DATAS
+def _normalizar_colunas_de_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Identifica colunas que provavelmente contêm datas pelo nome e normaliza
+    seus formatos para 'YYYY-MM-DD' de forma otimizada.
+    """
+    df_norm = df.copy()
+    # Palavras-chave para identificar colunas de data. Adicione outras se necessário.
+    PALAVRAS_CHAVE_DATA = ['data', 'date', 'dt_', '_dt', 'timestamp']
+    
+    for col in df_norm.columns:
+        # Verifica se alguma palavra-chave está no nome da coluna (ignorando maiúsculas/minúsculas)
+        if any(palavra in col.lower() for palavra in PALAVRAS_CHAVE_DATA):
+            try:
+                # Tenta converter a coluna inteira para datetime.
+                # errors='coerce' transforma falhas em NaT (Not a Time), não quebra a execução.
+                coluna_convertida = pd.to_datetime(df_norm[col], errors='coerce')
+                
+                # Cria uma máscara para saber quais valores foram convertidos com sucesso
+                mascara_datas_validas = coluna_convertida.notna()
+                
+                # Aplica a formatação padrão 'YYYY-MM-DD' apenas nas datas válidas
+                # e atribui de volta à coluna original do DataFrame copiado.
+                df_norm.loc[mascara_datas_validas, col] = coluna_convertida[mascara_datas_validas].dt.strftime('%Y-%m-%d')
+            except Exception:
+                # Se ocorrer um erro inesperado na conversão, apenas segue em frente,
+                # mantendo a coluna original para comparação.
+                pass
+    return df_norm
 
 def comparador_avancado_arquivos(
     caminho_arquivo1: str,
@@ -103,6 +133,11 @@ def comparador_avancado_arquivos(
             df1_comp = df1_comp.head(linhas_para_comparar)
             df2_comp = df2_comp.head(linhas_para_comparar)
         
+        # ETAPA ADICIONADA: Normalização de datas antes da comparação.
+        print("✨ Normalizando formatos de data para uma comparação justa...")
+        df1_comp = _normalizar_colunas_de_data(df1_comp)
+        df2_comp = _normalizar_colunas_de_data(df2_comp)
+
         print(f"Comparando o conteúdo de {linhas_para_comparar} linhas nas {len(colunas_comuns)} colunas em comum...")
 
         if df1_comp.equals(df2_comp):
@@ -112,9 +147,6 @@ def comparador_avancado_arquivos(
             scores_celulas = []
             if linhas_para_comparar > 0:
                 for i in range(linhas_para_comparar):
-                    # CORREÇÃO: Exibir progresso apenas no terminal, sem poluir o log.
-                    # Usamos sys.stdout.terminal.write para acessar o console original.
-                    # O '\r' no final faz com que a linha seja reescrita, criando um efeito de progresso.
                     percentual = (i + 1) / linhas_para_comparar
                     barra_progresso = '█' * int(percentual * 20)
                     sys.stdout.terminal.write(f"  Analisando conteúdo: [{barra_progresso:<20}] {percentual:.1%} - linha {i+1}/{linhas_para_comparar}\r")
@@ -128,7 +160,6 @@ def comparador_avancado_arquivos(
                         score_celula = SequenceMatcher(None, s_val1, s_val2).ratio()
                         scores_celulas.append(score_celula)
                 
-                # CORREÇÃO: Após o loop, imprime uma linha em branco no terminal para "limpar" a barra de progresso.
                 sys.stdout.terminal.write("\n")
 
                 if scores_celulas:
@@ -197,12 +228,12 @@ def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
 def _carregar_dataframe_silencioso(caminho_arquivo: str, ler_apenas_cabecalho: bool = False) -> pd.DataFrame:
     """Versão simplificada para carregar DF sem imprimir na tela, com opção de ler apenas o cabeçalho."""
     extensao = os.path.splitext(caminho_arquivo)[1].lower()
-    linhas_para_ler = 0 if ler_apenas_cabecalho else None
+    linhas_para_ler = 1 if ler_apenas_cabecalho else None
     
     if extensao == '.csv':
-        return pd.read_csv(caminho_arquivo, low_memory=False, nrows=linhas_para_ler)
+        return pd.read_csv(caminho_arquivo, low_memory=False, nrows=linhas_para_ler, dtype=str)
     elif extensao == '.xlsx':
-        return pd.read_excel(caminho_arquivo, nrows=linhas_para_ler)
+        return pd.read_excel(caminho_arquivo, nrows=linhas_para_ler, dtype=str)
     raise ValueError("Extensão não suportada.")
 
 def encontrar_pares_de_arquivos_por_similaridade(
@@ -323,7 +354,9 @@ def _executar_e_resumir_comparacoes(pares: List, nao_pareados_a: List, nao_parea
     else:
         for caminho1, caminho2 in pares:
             similaridade = comparador_avancado_arquivos(caminho1, caminho2, limite_linhas_conteudo=limite_linhas)
-            resultados_finais[f"{os.path.basename(caminho1)} (de '{os.path.basename(os.path.dirname(caminho1))}') vs {os.path.basename(caminho2)}"] = similaridade
+            # Ajuste no nome do par para cenários mistos
+            nome_arq1 = f"{os.path.basename(caminho1)} (de '{os.path.basename(os.path.dirname(caminho1))}')" if "cenario2" in caminho1 else os.path.basename(caminho1)
+            resultados_finais[f"{nome_arq1} vs {os.path.basename(caminho2)}"] = similaridade
             print("\n\n")
 
     print("\n\n######################################################")
@@ -369,7 +402,7 @@ if __name__ == '__main__':
     LIMITE_DE_LINHAS_PARA_ANALISE = 10000
 
     # Configuração do Logger
-    nome_log = f"log_comparacao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    nome_log = f"log_comparacao_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
     sys.stdout = Logger(nome_log)
 
     print("######################################################")
@@ -391,14 +424,17 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(dir_a, "T_account"), exist_ok=True)
         os.makedirs(os.path.join(dir_a, "T_product"), exist_ok=True)
         os.makedirs(os.path.join(dir_a, "T_sales_unmatched"), exist_ok=True)
-        df_account = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B']})
+        df_account = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B'], 'creation_date': ['2025-01-10', '2025-02-15']})
         df_product = pd.DataFrame({'sku': ['X1', 'Y2'], 'price': [100, 200]})
         df_sales = pd.DataFrame({'date': ['2025-01-01'], 'value': [500]})
         df_supplier = pd.DataFrame({'cnpj': ['11.222.333/0001-44']})
+        
+        df_account_b = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B'], 'creation_date': ['10/01/2025', '15/02/2025']})
+
         df_account.to_csv(os.path.join(dir_a, "T_account", "gdfsdf-random-name.csv"), index=False)
         df_product.to_excel(os.path.join(dir_a, "T_product", "data.xlsx"), index=False)
         df_sales.to_csv(os.path.join(dir_a, "T_sales_unmatched", "report.csv"), index=False)
-        df_account.to_csv(os.path.join(dir_b, "T_account.csv"), index=False)
+        df_account_b.to_csv(os.path.join(dir_b, "T_account.csv"), index=False)
         df_product.to_excel(os.path.join(dir_b, "T_product.xlsx"), index=False)
         df_supplier.to_csv(os.path.join(dir_b, "T_supplier_unmatched.csv"), index=False)
         
@@ -414,9 +450,8 @@ if __name__ == '__main__':
         os.makedirs(dir_a, exist_ok=True)
         os.makedirs(dir_b, exist_ok=True)
 
-        df_clientes_orig = pd.DataFrame({'ID_Cliente': [101, 102, 103, 104], 'Nome': ['Alice', 'Bruno', 'Carlos', 'Diana'], 'Idade': [34, 25, 45, 29]})
-        df_clientes_novo_nome = df_clientes_orig.copy()
-        df_clientes_novo_nome.at[2, 'Nome'] = 'Carla'
+        df_clientes_orig = pd.DataFrame({'ID_Cliente': [101, 102], 'Nome': ['Alice', 'Bruno'], 'data_cadastro': ['10-05-2024', '12-06-2024']})
+        df_clientes_novo = pd.DataFrame({'ID_Cliente': [101, 102], 'Nome': ['Alice', 'Bruno'], 'data_cadastro': ['2024-05-10', '2024-06-12']})
         df_produtos = pd.DataFrame({'SKU': ['A-001', 'B-002', 'C-003'], 'Produto': ['Notebook', 'Mouse', 'Teclado'], 'Preco': [4500.00, 150.50, 299.90]})
         df_vendas_a = pd.DataFrame({'Data': ['2025-01-10'], 'Valor': [1000]})
         df_fornecedores_b = pd.DataFrame({'CNPJ': ['123456/0001-00'], 'Empresa': ['Fornecedor X']})
@@ -424,7 +459,7 @@ if __name__ == '__main__':
         df_clientes_orig.to_csv(os.path.join(dir_a, "base_clientes_jan.csv"), index=False)
         df_produtos.to_excel(os.path.join(dir_a, "catalogo_produtos.xlsx"), index=False)
         df_vendas_a.to_csv(os.path.join(dir_a, "relatorio_vendas.csv"), index=False)
-        df_clientes_novo_nome.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
+        df_clientes_novo.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
         df_produtos.to_excel(os.path.join(dir_b, "product_catalog_v2.xlsx"), index=False)
         df_fornecedores_b.to_csv(os.path.join(dir_b, "dados_fornecedores.csv"), index=False)
         
