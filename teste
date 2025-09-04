@@ -122,7 +122,6 @@ def comparador_avancado_arquivos(
                     s_val1 = str(val1) if pd.notna(val1) else ""
                     s_val2 = str(val2) if pd.notna(val2) else ""
                     
-                    # Usa similaridade de texto para todas as colunas
                     score_celula = SequenceMatcher(None, s_val1, s_val2).ratio()
                     scores_celulas.append(score_celula)
             
@@ -165,6 +164,8 @@ class Logger(object):
         self.terminal.flush()
         self.log.flush()
 
+# --- FUNÇÕES PARA O CENÁRIO 1 (SIMILARIDADE DE ESTRUTURA) ---
+
 def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
     """
     Lê um diretório e extrai metadados (caminho, forma, colunas) de cada arquivo.
@@ -175,7 +176,6 @@ def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
         caminho_completo = os.path.join(caminho_dir, nome_arquivo)
         if os.path.isfile(caminho_completo) and (nome_arquivo.endswith('.csv') or nome_arquivo.endswith('.xlsx')):
             try:
-                # Usamos uma função de carregamento silenciosa para não poluir o log de metadados
                 df = _carregar_dataframe_silencioso(caminho_completo)
                 metadados.append({
                     "caminho": caminho_completo,
@@ -196,17 +196,15 @@ def _carregar_dataframe_silencioso(caminho_arquivo: str) -> pd.DataFrame:
         return pd.read_excel(caminho_arquivo)
     raise ValueError("Extensão não suportada.")
 
-
-def encontrar_pares_de_arquivos(
+def encontrar_pares_de_arquivos_por_similaridade(
     meta_dir_a: List[Dict[str, Any]],
     meta_dir_b: List[Dict[str, Any]],
     limiar_similaridade_previa: float = 0.75
 ) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
     """
-    Encontra os melhores pares de arquivos entre dois diretórios com base na similaridade
-    de estrutura (dimensões) e nomes de colunas.
+    Encontra os melhores pares com base na similaridade de estrutura e nomes de colunas.
     """
-    print("\n🤝 Iniciando o processo de pareamento de arquivos entre os diretórios...")
+    print("\n🤝 Iniciando o processo de pareamento por SIMILARIDADE DE ESTRUTURA...")
     
     pares_encontrados = []
     arquivos_b_disponiveis = meta_dir_b[:]
@@ -217,17 +215,14 @@ def encontrar_pares_de_arquivos(
         maior_score = -1
 
         for meta_b in arquivos_b_disponiveis:
-            # Calcular similaridade de colunas (Jaccard)
             intersecao = len(meta_a["colunas"].intersection(meta_b["colunas"]))
             uniao = len(meta_a["colunas"].union(meta_b["colunas"]))
             score_colunas = intersecao / uniao if uniao > 0 else 0.0
 
-            # Calcular similaridade de dimensões (shape)
             shape_a = meta_a["shape"]
             shape_b = meta_b["shape"]
             sim_colunas_total = min(shape_a[1], shape_b[1]) / max(shape_a[1], shape_b[1]) if max(shape_a[1], shape_b[1]) > 0 else 1.0
             
-            # Score combinado: A similaridade das colunas é mais importante para a identidade do arquivo.
             score_combinado = (score_colunas * 0.7) + (sim_colunas_total * 0.3)
 
             if score_combinado > maior_score:
@@ -240,36 +235,79 @@ def encontrar_pares_de_arquivos(
             arquivos_b_disponiveis.remove(melhor_par)
             print(f"  - Par encontrado: '{os.path.basename(meta_a['caminho'])}' <=> '{os.path.basename(melhor_par['caminho'])}' (Score prévio: {maior_score:.2%})")
 
-    # Identificar arquivos que não foram pareados
     nao_pareados_a = [meta["caminho"] for meta in meta_dir_a if meta["caminho"] not in arquivos_a_pareados]
     nao_pareados_b = [meta["caminho"] for meta in arquivos_b_disponiveis]
 
     return pares_encontrados, nao_pareados_a, nao_pareados_b
 
-
-def processar_comparacao_entre_diretorios(dir_a: str, dir_b: str):
+def processar_comparacao_cenario_padrao(dir_a: str, dir_b: str):
     """
-    Função principal que orquestra todo o processo de comparação entre dois diretórios.
+    Orquestrador para o CENÁRIO PADRÃO: compara arquivos baseados em similaridade de estrutura.
     """
-    # Configura o logger
-    nome_log = f"log_comparacao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    sys.stdout = Logger(nome_log)
-    
-    print("######################################################")
-    print("### INÍCIO DA EXECUÇÃO DO COMPARADOR DE DIRETÓRIOS ###")
-    print("######################################################\n")
-    print(f"Diretório A: {dir_a}")
-    print(f"Diretório B: {dir_b}")
-    print(f"Log sendo salvo em: {nome_log}\n")
-
-    # Etapa 1: Extrair metadados de ambos os diretórios
     metadados_a = _analisar_metadados_diretorio(dir_a)
     metadados_b = _analisar_metadados_diretorio(dir_b)
 
-    # Etapa 2: Encontrar os pares correspondentes
-    pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos(metadados_a, metadados_b)
+    pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos_por_similaridade(metadados_a, metadados_b)
 
-    # Etapa 3: Executar a comparação avançada para cada par
+    _executar_e_resumir_comparacoes(pares, nao_pareados_a, nao_pareados_b)
+
+# --- FUNÇÕES PARA O CENÁRIO 2 (PASTA COMO CHAVE) ---
+
+def encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a: str, dir_b: str) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
+    """
+    Encontra pares com base na regra: nome da pasta em A == nome do arquivo em B.
+    """
+    print("\n🤝 Iniciando o processo de pareamento por CHAVE DE PASTA/ARQUIVO...")
+    
+    # Mapear chaves do diretório A (nome da pasta -> caminho do arquivo interno)
+    mapa_a = {}
+    nao_mapeados_a = []
+    for nome_pasta in os.listdir(dir_a):
+        caminho_pasta = os.path.join(dir_a, nome_pasta)
+        if os.path.isdir(caminho_pasta):
+            arquivos_na_pasta = [f for f in os.listdir(caminho_pasta) if f.endswith(('.csv', '.xlsx'))]
+            if arquivos_na_pasta:
+                # Pega o primeiro arquivo válido encontrado na pasta
+                mapa_a[nome_pasta] = os.path.join(caminho_pasta, arquivos_na_pasta[0])
+            else:
+                nao_mapeados_a.append(caminho_pasta)
+
+    # Mapear chaves do diretório B (nome do arquivo sem extensão -> caminho completo)
+    mapa_b = {}
+    for nome_arquivo in os.listdir(dir_b):
+        caminho_arquivo = os.path.join(dir_b, nome_arquivo)
+        if os.path.isfile(caminho_arquivo) and (nome_arquivo.endswith('.csv') or nome_arquivo.endswith('.xlsx')):
+            chave = os.path.splitext(nome_arquivo)[0]
+            mapa_b[chave] = caminho_arquivo
+
+    # Encontrar pares e não pareados
+    pares_encontrados = []
+    chaves_b_pareadas = set()
+    for chave_a, caminho_a in mapa_a.items():
+        if chave_a in mapa_b:
+            caminho_b = mapa_b[chave_a]
+            pares_encontrados.append((caminho_a, caminho_b))
+            chaves_b_pareadas.add(chave_a)
+            print(f"  - Par encontrado: '{os.path.basename(os.path.dirname(caminho_a))}' <=> '{os.path.basename(caminho_b)}'")
+    
+    nao_pareados_a = [caminho for chave, caminho in mapa_a.items() if chave not in mapa_b]
+    nao_pareados_b = [caminho for chave, caminho in mapa_b.items() if chave not in chaves_b_pareadas]
+
+    return pares_encontrados, nao_pareados_a, nao_pareados_b
+
+def processar_comparacao_cenario_pasta_chave(dir_a: str, dir_b: str):
+    """
+    Orquestrador para o CENÁRIO PASTA-CHAVE.
+    """
+    pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a, dir_b)
+    _executar_e_resumir_comparacoes(pares, nao_pareados_a, nao_pareados_b)
+
+# --- FUNÇÃO COMUM DE EXECUÇÃO E RESUMO ---
+
+def _executar_e_resumir_comparacoes(pares: List, nao_pareados_a: List, nao_pareados_b: List):
+    """
+    Função genérica que executa a comparação avançada e imprime o resumo final.
+    """
     print("\n\n######################################################")
     print("###     INICIANDO COMPARAÇÕES DETALHADAS     ###")
     print("######################################################")
@@ -280,10 +318,9 @@ def processar_comparacao_entre_diretorios(dir_a: str, dir_b: str):
     else:
         for caminho1, caminho2 in pares:
             similaridade = comparador_avancado_arquivos(caminho1, caminho2)
-            resultados_finais[f"{os.path.basename(caminho1)} vs {os.path.basename(caminho2)}"] = similaridade
-            print("\n\n") # Espaçamento entre as comparações
+            resultados_finais[f"{os.path.basename(caminho1)} (de '{os.path.basename(os.path.dirname(caminho1))}') vs {os.path.basename(caminho2)}"] = similaridade
+            print("\n\n")
 
-    # Etapa 4: Apresentar o resumo final no log
     print("\n\n######################################################")
     print("###              RESUMO DA EXECUÇÃO              ###")
     print("######################################################\n")
@@ -295,12 +332,12 @@ def processar_comparacao_entre_diretorios(dir_a: str, dir_b: str):
     else:
         print("Nenhuma comparação foi executada.")
         
-    print("\n--- Arquivos Sem Par no Diretório A ---")
+    print("\n--- Itens Sem Par no Diretório A ---")
     if nao_pareados_a:
-        for arq in nao_pareados_a:
-            print(f"- {os.path.basename(arq)}")
+        for item in nao_pareados_a:
+            print(f"- {os.path.basename(item)}")
     else:
-        print("Todos os arquivos do Diretório A foram pareados.")
+        print("Todos os itens do Diretório A foram pareados.")
 
     print("\n--- Arquivos Sem Par no Diretório B ---")
     if nao_pareados_b:
@@ -313,49 +350,86 @@ def processar_comparacao_entre_diretorios(dir_a: str, dir_b: str):
     print("###           EXECUÇÃO FINALIZADA                ###")
     print("######################################################")
 
+
 # ==============================================================================
 # BLOCO DE EXECUÇÃO E EXEMPLO
 # ==============================================================================
 if __name__ == '__main__':
-    # --- Criação de um ambiente de teste com diretórios e arquivos de exemplo ---
-    print("Configurando ambiente de teste...")
-    
-    # Criando diretórios
-    dir_a = "diretorio_A"
-    dir_b = "diretorio_B"
-    os.makedirs(dir_a, exist_ok=True)
-    os.makedirs(dir_b, exist_ok=True)
+    # --- CONTROLE DE CENÁRIO ---
+    # Altere para True para usar o cenário de "PASTA COMO CHAVE"
+    USAR_CENARIO_PASTA_COMO_CHAVE = True
 
-    # Criando DataFrames de exemplo
-    df_clientes_orig = pd.DataFrame({
-        'ID_Cliente': [101, 102, 103, 104],
-        'Nome': ['Alice', 'Bruno', 'Carlos', 'Diana'],
-        'Idade': [34, 25, 45, 29]
-    })
-    
-    df_clientes_novo_nome = df_clientes_orig.copy()
-    df_clientes_novo_nome.at[2, 'Nome'] = 'Carla' # Pequena alteração no conteúdo
+    # Configuração do Logger
+    nome_log = f"log_comparacao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    sys.stdout = Logger(nome_log)
 
-    df_produtos = pd.DataFrame({
-        'SKU': ['A-001', 'B-002', 'C-003'],
-        'Produto': ['Notebook', 'Mouse', 'Teclado'],
-        'Preco': [4500.00, 150.50, 299.90]
-    })
-    
-    df_vendas_a = pd.DataFrame({'Data': ['2025-01-10'], 'Valor': [1000]})
-    df_fornecedores_b = pd.DataFrame({'CNPJ': ['123456/0001-00'], 'Empresa': ['Fornecedor X']})
+    print("######################################################")
+    print("### INÍCIO DA EXECUÇÃO DO COMPARADOR DE DIRETÓRIOS ###")
+    print("######################################################\n")
+    print(f"Log sendo salvo em: {nome_log}\n")
 
-    # Salvando os arquivos com nomes diferentes nos diretórios
-    df_clientes_orig.to_csv(os.path.join(dir_a, "base_clientes_jan.csv"), index=False)
-    df_produtos.to_excel(os.path.join(dir_a, "catalogo_produtos.xlsx"), index=False)
-    df_vendas_a.to_csv(os.path.join(dir_a, "relatorio_vendas.csv"), index=False) # Arquivo sem par
+    if USAR_CENARIO_PASTA_COMO_CHAVE:
+        print("MODO DE EXECUÇÃO: Cenário PASTA-COMO-CHAVE selecionado.")
+        # --- Configuração do ambiente de teste para o Cenário 2 ---
+        print("Configurando ambiente de teste para o Cenário 2...")
+        dir_a = "dir_a_cenario2"
+        dir_b = "dir_b_cenario2"
+        os.makedirs(dir_a, exist_ok=True)
+        os.makedirs(dir_b, exist_ok=True)
 
-    df_clientes_novo_nome.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
-    df_produtos.to_excel(os.path.join(dir_b, "product_catalog_v2.xlsx"), index=False)
-    df_fornecedores_b.to_csv(os.path.join(dir_b, "dados_fornecedores.csv"), index=False) # Arquivo sem par
+        # Criar subpastas em dir_a
+        os.makedirs(os.path.join(dir_a, "T_account"), exist_ok=True)
+        os.makedirs(os.path.join(dir_a, "T_product"), exist_ok=True)
+        os.makedirs(os.path.join(dir_a, "T_sales_unmatched"), exist_ok=True)
 
-    print("Ambiente de teste configurado.\n")
-    
-    # --- Execução da função principal ---
-    # A partir daqui, toda a saída será capturada pelo logger
-    processar_comparacao_entre_diretorios(dir_a, dir_b)
+        # DataFrames de exemplo
+        df_account = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B']})
+        df_product = pd.DataFrame({'sku': ['X1', 'Y2'], 'price': [100, 200]})
+        df_sales = pd.DataFrame({'date': ['2025-01-01'], 'value': [500]})
+        df_supplier = pd.DataFrame({'cnpj': ['11.222.333/0001-44']})
+
+        # Salvar arquivos
+        df_account.to_csv(os.path.join(dir_a, "T_account", "gdfsdf-random-name.csv"), index=False)
+        df_product.to_excel(os.path.join(dir_a, "T_product", "data.xlsx"), index=False)
+        df_sales.to_csv(os.path.join(dir_a, "T_sales_unmatched", "report.csv"), index=False)
+
+        df_account.to_csv(os.path.join(dir_b, "T_account.csv"), index=False)
+        df_product.to_excel(os.path.join(dir_b, "T_product.xlsx"), index=False)
+        df_supplier.to_csv(os.path.join(dir_b, "T_supplier_unmatched.csv"), index=False)
+        
+        print(f"Diretório A: {dir_a}")
+        print(f"Diretório B: {dir_b}")
+        print("Ambiente de teste configurado.\n")
+
+        # Execução do Cenário 2
+        processar_comparacao_cenario_pasta_chave(dir_a, dir_b)
+
+    else:
+        print("MODO DE EXECUÇÃO: Cenário PADRÃO (similaridade de estrutura) selecionado.")
+        # --- Configuração do ambiente de teste para o Cenário 1 (Original) ---
+        print("Configurando ambiente de teste para o Cenário 1...")
+        dir_a = "diretorio_A_cenario1"
+        dir_b = "diretorio_B_cenario1"
+        os.makedirs(dir_a, exist_ok=True)
+        os.makedirs(dir_b, exist_ok=True)
+
+        df_clientes_orig = pd.DataFrame({'ID_Cliente': [101, 102, 103, 104], 'Nome': ['Alice', 'Bruno', 'Carlos', 'Diana'], 'Idade': [34, 25, 45, 29]})
+        df_clientes_novo_nome = df_clientes_orig.copy()
+        df_clientes_novo_nome.at[2, 'Nome'] = 'Carla'
+        df_produtos = pd.DataFrame({'SKU': ['A-001', 'B-002', 'C-003'], 'Produto': ['Notebook', 'Mouse', 'Teclado'], 'Preco': [4500.00, 150.50, 299.90]})
+        df_vendas_a = pd.DataFrame({'Data': ['2025-01-10'], 'Valor': [1000]})
+        df_fornecedores_b = pd.DataFrame({'CNPJ': ['123456/0001-00'], 'Empresa': ['Fornecedor X']})
+
+        df_clientes_orig.to_csv(os.path.join(dir_a, "base_clientes_jan.csv"), index=False)
+        df_produtos.to_excel(os.path.join(dir_a, "catalogo_produtos.xlsx"), index=False)
+        df_vendas_a.to_csv(os.path.join(dir_a, "relatorio_vendas.csv"), index=False)
+        df_clientes_novo_nome.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
+        df_produtos.to_excel(os.path.join(dir_b, "product_catalog_v2.xlsx"), index=False)
+        df_fornecedores_b.to_csv(os.path.join(dir_b, "dados_fornecedores.csv"), index=False)
+        
+        print(f"Diretório A: {dir_a}")
+        print(f"Diretório B: {dir_b}")
+        print("Ambiente de teste configurado.\n")
+
+        # Execução do Cenário 1
+        processar_comparacao_cenario_padrao(dir_a, dir_b)
