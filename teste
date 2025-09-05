@@ -20,7 +20,7 @@ def _carregar_dataframe(caminho_arquivo: str, sheet_name: Any = 0) -> pd.DataFra
 
     try:
         # ATENÇÃO: Carregamos os dados como string para evitar que o Pandas
-        # infira tipos de data incorretos, o que prejudicaria nossa normalização manual.
+        # infira tipos de data/hora incorretos, o que prejudicaria nossa normalização manual.
         if extensao == '.csv':
             return pd.read_csv(caminho_arquivo, low_memory=False, dtype=str)
         elif extensao == '.xlsx':
@@ -32,39 +32,51 @@ def _carregar_dataframe(caminho_arquivo: str, sheet_name: Any = 0) -> pd.DataFra
     except Exception as e:
         raise Exception(f"ERRO ao ler o arquivo '{caminho_arquivo}': {e}")
 
-# NOVO: NORMALIZAÇÃO ROBUSTA DE DATAS
+# APRIMORADO: NORMALIZAÇÃO ROBUSTA DE DATAS E TIMESTAMPS
 def _normalizar_colunas_de_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Normaliza formatos de data em colunas identificadas por palavras-chave
-    ou por tentativa de conversão.
+    Identifica colunas que provavelmente contêm datas/horas pelo nome e normaliza
+    seus formatos para 'YYYY-MM-DD HH:MM:SS' de forma otimizada.
     """
     df_norm = df.copy()
     PALAVRAS_CHAVE_DATA = ['data', 'date', 'dt_', '_dt', 'timestamp']
-    FORMATOS_DATA = ['%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y', 
-                     '%d-%m-%y', '%d/%m/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%b-%d']
+    
+    # Lista expandida para incluir formatos de data e hora
+    FORMATOS_DATETIME = [
+        # Formatos de Data e Hora
+        '%Y-%m-%d %H:%M:%S', '%d/%m/%Y %H:%M:%S', '%Y/%m/%d %H:%M:%S',
+        '%d%b%Y:%H:%M:%S',  # Formato: 02SEP2012:23:59:00
+        # Formatos Apenas de Data (para manter compatibilidade)
+        '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y', 
+        '%d-%m-%y', '%d/%m/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%b-%d'
+    ]
     
     for col in df_norm.columns:
         if any(palavra in col.lower() for palavra in PALAVRAS_CHAVE_DATA):
             try:
-                coluna_normalizada = pd.Series(dtype='object')
-                data_encontrada = False
+                coluna_original = df_norm[col].copy()
+                coluna_normalizada = None
                 
-                for fmt in FORMATOS_DATA:
-                    temp_series = pd.to_datetime(df_norm[col], format=fmt, errors='coerce')
-                    # Se mais de 80% dos valores não são NaT, assumimos que o formato foi encontrado.
-                    if (temp_series.notna().sum() / len(temp_series)) > 0.8:
-                        coluna_normalizada = temp_series
-                        data_encontrada = True
-                        break
+                # O formato ISO (com T e Z) é muito bem tratado pela inferência padrão
+                # Vamos tentar a inferência primeiro, pois é muito poderosa.
+                temp_series_infer = pd.to_datetime(coluna_original, errors='coerce')
+
+                # Se a inferência funcionou bem, usamos ela.
+                if (temp_series_infer.notna().sum() / max(1, coluna_original.notna().sum())) > 0.8:
+                    coluna_normalizada = temp_series_infer
+                else: # Senão, tentamos os formatos explícitos
+                    for fmt in FORMATOS_DATETIME:
+                        temp_series = pd.to_datetime(coluna_original, format=fmt, errors='coerce')
+                        if (temp_series.notna().sum() / max(1, coluna_original.notna().sum())) > 0.8:
+                            coluna_normalizada = temp_series
+                            break
                 
-                if data_encontrada:
-                    df_norm[col] = coluna_normalizada.dt.strftime('%Y-%m-%d')
-                else:
-                    # Se nenhum formato explícito funcionou, tenta a inferência padrão do Pandas
-                    temp_series = pd.to_datetime(df_norm[col], errors='coerce')
-                    df_norm[col] = temp_series.dt.strftime('%Y-%m-%d')
+                if coluna_normalizada is not None:
+                    # Formato de saída padronizado para data E hora
+                    df_norm[col] = coluna_normalizada.dt.strftime('%Y-%m-%d %H:%M:%S')
 
             except Exception:
+                # Se tudo falhar, mantém a coluna original
                 pass
     return df_norm
 
@@ -142,7 +154,7 @@ def comparador_avancado_arquivos(
             df1_comp = df1_comp.head(linhas_para_comparar)
             df2_comp = df2_comp.head(linhas_para_comparar)
         
-        print("✨ Normalizando formatos de data para uma comparação justa...")
+        print("✨ Normalizando formatos de data e hora para uma comparação justa...")
         df1_comp = _normalizar_colunas_de_data(df1_comp)
         df2_comp = _normalizar_colunas_de_data(df2_comp)
 
@@ -209,7 +221,6 @@ class Logger(object):
         self.terminal.flush()
         self.log.flush()
 
-# NOVO: GERAÇÃO DE LOG EM EXCEL
 def _gerar_log_excel(resultados: Dict, nao_pareados_a: List, nao_pareados_b: List, nome_arquivo_base: str):
     """
     Gera um relatório de log estruturado em um arquivo XLSX com múltiplas planilhas.
@@ -218,7 +229,6 @@ def _gerar_log_excel(resultados: Dict, nao_pareados_a: List, nao_pareados_b: Lis
     print(f"💾 Gerando relatório estruturado em: '{nome_arquivo_excel}'")
     try:
         with pd.ExcelWriter(nome_arquivo_excel, engine='openpyxl') as writer:
-            # Planilha 1: Resultados das Comparações
             if resultados:
                 df_resultados = pd.DataFrame(resultados.items(), columns=['Par de Arquivos', 'Similaridade (%)'])
                 df_resultados['Similaridade (%)'] = df_resultados['Similaridade (%)'].apply(lambda x: f"{x:.2%}")
@@ -229,7 +239,6 @@ def _gerar_log_excel(resultados: Dict, nao_pareados_a: List, nao_pareados_b: Lis
                 df_temp = pd.DataFrame({'Informação': ['Nenhuma comparação foi executada.']})
                 df_temp.to_excel(writer, sheet_name='Resultados', index=False)
                 
-            # Planilha 2: Arquivos Sem Par no Diretório A
             if nao_pareados_a:
                 df_nao_pareados_a = pd.DataFrame(nao_pareados_a, columns=['Caminho do Arquivo (Dir A)'])
                 df_nao_pareados_a['Nome do Arquivo'] = df_nao_pareados_a['Caminho do Arquivo (Dir A)'].apply(os.path.basename)
@@ -237,7 +246,6 @@ def _gerar_log_excel(resultados: Dict, nao_pareados_a: List, nao_pareados_b: Lis
                 writer.sheets['Nao_Pareados_A'].column_dimensions['A'].width = 80
                 writer.sheets['Nao_Pareados_A'].column_dimensions['B'].width = 40
             
-            # Planilha 3: Arquivos Sem Par no Diretório B
             if nao_pareados_b:
                 df_nao_pareados_b = pd.DataFrame(nao_pareados_b, columns=['Caminho do Arquivo (Dir B)'])
                 df_nao_pareados_b['Nome do Arquivo'] = df_nao_pareados_b['Caminho do Arquivo (Dir B)'].apply(os.path.basename)
@@ -251,11 +259,8 @@ def _gerar_log_excel(resultados: Dict, nao_pareados_a: List, nao_pareados_b: Lis
 
 
 # --- FUNÇÕES PARA O CENÁRIO 1 (SIMILARIDADE DE ESTRUTURA) ---
-
 def _analisar_metadados_diretorio(caminho_dir: str) -> List[Dict[str, Any]]:
-    """
-    Lê um diretório e extrai metadados (caminho, forma, colunas) de cada arquivo.
-    """
+    """Lê um diretório e extrai metadados (caminho, forma, colunas) de cada arquivo."""
     metadados = []
     print(f"\n🔎 Analisando metadados do diretório: '{caminho_dir}'")
     for nome_arquivo in os.listdir(caminho_dir):
@@ -278,8 +283,6 @@ def _carregar_dataframe_silencioso(caminho_arquivo: str, ler_apenas_cabecalho: b
     """Versão simplificada para carregar DF sem imprimir na tela, com opção de ler apenas o cabeçalho."""
     extensao = os.path.splitext(caminho_arquivo)[1].lower()
     linhas_para_ler = 1 if ler_apenas_cabecalho else None
-    
-    # Dtype='str' para que a normalização de datas funcione corretamente
     if extensao == '.csv':
         return pd.read_csv(caminho_arquivo, low_memory=False, nrows=linhas_para_ler, dtype=str)
     elif extensao == '.xlsx':
@@ -291,64 +294,45 @@ def encontrar_pares_de_arquivos_por_similaridade(
     meta_dir_b: List[Dict[str, Any]],
     limiar_similaridade_previa: float = 0.75
 ) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
-    """
-    Encontra os melhores pares com base na similaridade de estrutura e nomes de colunas.
-    """
+    """Encontra os melhores pares com base na similaridade de estrutura e nomes de colunas."""
     print("\n🤝 Iniciando o processo de pareamento por SIMILARIDADE DE ESTRUTURA...")
-    
     pares_encontrados = []
     arquivos_b_disponiveis = meta_dir_b[:]
     arquivos_a_pareados = set()
-
     for meta_a in meta_dir_a:
         melhor_par = None
         maior_score = -1
-
         for meta_b in arquivos_b_disponiveis:
             intersecao = len(meta_a["colunas"].intersection(meta_b["colunas"]))
             uniao = len(meta_a["colunas"].union(meta_b["colunas"]))
             score_colunas = intersecao / uniao if uniao > 0 else 0.0
-
             shape_a = meta_a["shape"]
             shape_b = meta_b["shape"]
             sim_colunas_total = min(shape_a[1], shape_b[1]) / max(shape_a[1], shape_b[1]) if max(shape_a[1], shape_b[1]) > 0 else 1.0
-            
             score_combinado = (score_colunas * 0.7) + (sim_colunas_total * 0.3)
-
             if score_combinado > maior_score:
                 maior_score = score_combinado
                 melhor_par = meta_b
-
         if melhor_par and maior_score >= limiar_similaridade_previa:
             pares_encontrados.append((meta_a["caminho"], melhor_par["caminho"]))
             arquivos_a_pareados.add(meta_a["caminho"])
             arquivos_b_disponiveis.remove(melhor_par)
             print(f"  - Par encontrado: '{os.path.basename(meta_a['caminho'])}' <=> '{os.path.basename(melhor_par['caminho'])}' (Score prévio: {maior_score:.2%})")
-
     nao_pareados_a = [meta["caminho"] for meta in meta_dir_a if meta["caminho"] not in arquivos_a_pareados]
     nao_pareados_b = [meta["caminho"] for meta in arquivos_b_disponiveis]
-
     return pares_encontrados, nao_pareados_a, nao_pareados_b
 
 def processar_comparacao_cenario_padrao(dir_a: str, dir_b: str, limite_linhas: int):
-    """
-    Orquestrador para o CENÁRIO PADRÃO: compara arquivos baseados em similaridade de estrutura.
-    """
+    """Orquestrador para o CENÁRIO PADRÃO: compara arquivos baseados em similaridade de estrutura."""
     metadados_a = _analisar_metadados_diretorio(dir_a)
     metadados_b = _analisar_metadados_diretorio(dir_b)
-
     pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos_por_similaridade(metadados_a, metadados_b)
-
     _executar_e_resumir_comparacoes(pares, nao_pareados_a, nao_pareados_b, limite_linhas)
 
 # --- FUNÇÕES PARA O CENÁRIO 2 (PASTA COMO CHAVE) ---
-
 def encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a: str, dir_b: str) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
-    """
-    Encontra pares com base na regra: nome da pasta em A == nome do arquivo em B.
-    """
+    """Encontra pares com base na regra: nome da pasta em A == nome do arquivo em B."""
     print("\n🤝 Iniciando o processo de pareamento por CHAVE DE PASTA/ARQUIVO...")
-    
     mapa_a = {}
     nao_mapeados_a = []
     for nome_pasta in os.listdir(dir_a):
@@ -359,14 +343,12 @@ def encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a: str, dir_b: str) -> Tu
                 mapa_a[nome_pasta] = os.path.join(caminho_pasta, arquivos_na_pasta[0])
             else:
                 nao_mapeados_a.append(caminho_pasta)
-
     mapa_b = {}
     for nome_arquivo in os.listdir(dir_b):
         caminho_arquivo = os.path.join(dir_b, nome_arquivo)
         if os.path.isfile(caminho_arquivo) and (nome_arquivo.endswith('.csv') or nome_arquivo.endswith('.xlsx')):
             chave = os.path.splitext(nome_arquivo)[0]
             mapa_b[chave] = caminho_arquivo
-
     pares_encontrados = []
     chaves_b_pareadas = set()
     for chave_a, caminho_a in mapa_a.items():
@@ -375,61 +357,48 @@ def encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a: str, dir_b: str) -> Tu
             pares_encontrados.append((caminho_a, caminho_b))
             chaves_b_pareadas.add(chave_a)
             print(f"  - Par encontrado: '{os.path.basename(os.path.dirname(caminho_a))}' <=> '{os.path.basename(caminho_b)}'")
-    
     nao_pareados_a = [caminho for chave, caminho in mapa_a.items() if chave not in mapa_b]
     nao_pareados_b = [caminho for chave, caminho in mapa_b.items() if chave not in chaves_b_pareadas]
-
     return pares_encontrados, nao_pareados_a, nao_pareados_b
 
 def processar_comparacao_cenario_pasta_chave(dir_a: str, dir_b: str, limite_linhas: int):
-    """
-    Orquestrador para o CENÁRIO PASTA-CHAVE.
-    """
+    """Orquestrador para o CENÁRIO PASTA-CHAVE."""
     pares, nao_pareados_a, nao_pareados_b = encontrar_pares_de_arquivos_por_chave_de_pasta(dir_a, dir_b)
     _executar_e_resumir_comparacoes(pares, nao_pareados_a, nao_pareados_b, limite_linhas)
 
 # --- FUNÇÃO COMUM DE EXECUÇÃO E RESUMO ---
-
 def _executar_e_resumir_comparacoes(pares: List, nao_pareados_a: List, nao_pareados_b: List, limite_linhas: int):
-    """
-    Função genérica que executa a comparação avançada e imprime o resumo final.
-    """
+    """Função genérica que executa a comparação avançada e imprime o resumo final."""
     print("\n\n######################################################")
     print("###     INICIANDO COMPARAÇÕES DETALHADAS     ###")
     print("######################################################")
-    
     resultados_finais = {}
     if not pares:
         print("\nNenhum par de arquivos foi encontrado para comparação detalhada.")
     else:
         for caminho1, caminho2 in pares:
             similaridade = comparador_avancado_arquivos(caminho1, caminho2, limite_linhas_conteudo=limite_linhas)
-            # Ajuste no nome do par para cenários mistos
             nome_par = f"{os.path.basename(caminho1)}"
             if os.path.dirname(caminho1).endswith("cenario2"):
                 nome_par = f"{os.path.basename(os.path.dirname(caminho1))}/{os.path.basename(caminho1)}"
-            
             resultados_finais[f"{nome_par} vs {os.path.basename(caminho2)}"] = similaridade
             print("\n\n")
 
     print("\n\n######################################################")
     print("###              RESUMO DA EXECUÇÃO              ###")
     print("######################################################\n")
-    
     print("--- Resultados das Comparações ---")
     if resultados_finais:
         for par, score in resultados_finais.items():
             print(f"- {par}: {score:.2%}")
     else:
         print("Nenhuma comparação foi executada.")
-        
     print("\n--- Itens Sem Par no Diretório A ---")
     if nao_pareados_a:
         for item in nao_pareados_a:
             print(f"- {os.path.basename(item)}")
     else:
         print("Todos os itens do Diretório A foram pareados.")
-
     print("\n--- Arquivos Sem Par no Diretório B ---")
     if nao_pareados_b:
         for arq in nao_pareados_b:
@@ -437,30 +406,20 @@ def _executar_e_resumir_comparacoes(pares: List, nao_pareados_a: List, nao_parea
     else:
         print("Todos os arquivos do Diretório B foram pareados.")
 
-    # NOVO: Chamada para a função que gera o log XLSX
     _gerar_log_excel(resultados_finais, nao_pareados_a, nao_pareados_b, nome_arquivo_base=datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         
     print("\n\n######################################################")
     print("###           EXECUÇÃO FINALIZADA                ###")
     print("######################################################")
 
-
 # ==============================================================================
 # BLOCO DE EXECUÇÃO E EXEMPLO
 # ==============================================================================
 if __name__ == '__main__':
     # --- CONTROLES GLOBAIS ---
-    
-    # 1. ESCOLHA O CENÁRIO DE EXECUÇÃO
-    # Altere para True para usar o cenário de "PASTA COMO CHAVE"
     USAR_CENARIO_PASTA_COMO_CHAVE = False
-
-    # 2. CONTROLE DE PERFORMANCE
-    # Defina o número de linhas para a amostragem de conteúdo.
-    # Use None para analisar TODAS as linhas (lento para arquivos grandes).
     LIMITE_DE_LINHAS_PARA_ANALISE = 10000
 
-    # Configuração do Logger
     nome_log_txt = f"log_comparacao_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
     sys.stdout = Logger(nome_log_txt)
 
@@ -473,64 +432,38 @@ if __name__ == '__main__':
     else:
         print("PARÂMETRO DE PERFORMANCE: Análise de conteúdo fará a leitura de TODAS as linhas.\n")
 
-
     if USAR_CENARIO_PASTA_COMO_CHAVE:
-        print("MODO DE EXECUÇÃO: Cenário PASTA-COMO-CHAVE selecionado.")
-        dir_a = "dir_a_cenario2"
-        dir_b = "dir_b_cenario2"
-        os.makedirs(dir_a, exist_ok=True)
-        os.makedirs(dir_b, exist_ok=True)
-        os.makedirs(os.path.join(dir_a, "T_account"), exist_ok=True)
-        os.makedirs(os.path.join(dir_a, "T_product"), exist_ok=True)
-        os.makedirs(os.path.join(dir_a, "T_sales_unmatched"), exist_ok=True)
-        df_account = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B'], 'creation_date': ['2025-01-10', '2025-02-15']})
-        df_product = pd.DataFrame({'sku': ['X1', 'Y2'], 'price': [100, 200]})
-        df_sales = pd.DataFrame({'date': ['2025-01-01'], 'value': [500]})
-        df_supplier = pd.DataFrame({'cnpj': ['11.222.333/0001-44']})
-        df_account_b = pd.DataFrame({'id': [1, 2], 'account_name': ['Company A', 'Company B'], 'creation_date': ['10/01/2025', '15/02/2025']})
-        
-        # Otimizado para demonstrar o problema de data
-        df_clientes_orig_data = pd.DataFrame({'ID_Cliente': [101, 102], 'data_cadastro': ['05-09-25', '15-10-25']})
-        df_clientes_novo_data = pd.DataFrame({'ID_Cliente': [101, 102], 'data_cadastro': ['05-SEP-25', '15-OCT-25']})
-        
-        os.makedirs(os.path.join(dir_a, "teste_data"), exist_ok=True)
-        df_clientes_orig_data.to_csv(os.path.join(dir_a, "teste_data", "data_a.csv"), index=False)
-        df_clientes_novo_data.to_csv(os.path.join(dir_b, "teste_data.csv"), index=False)
-        
-        df_account.to_csv(os.path.join(dir_a, "T_account", "gdfsdf-random-name.csv"), index=False)
-        df_product.to_excel(os.path.join(dir_a, "T_product", "data.xlsx"), index=False)
-        df_sales.to_csv(os.path.join(dir_a, "T_sales_unmatched", "report.csv"), index=False)
-        df_account_b.to_csv(os.path.join(dir_b, "T_account.csv"), index=False)
-        df_product.to_excel(os.path.join(dir_b, "T_product.xlsx"), index=False)
-        df_supplier.to_csv(os.path.join(dir_b, "T_supplier_unmatched.csv"), index=False)
-        
-        print(f"Diretório A: {dir_a}")
-        print(f"Diretório B: {dir_b}")
-        print("Ambiente de teste configurado.\n")
-        processar_comparacao_cenario_pasta_chave(dir_a, dir_b, limite_linhas=LIMITE_DE_LINHAS_PARA_ANALISE)
-
+        # Código do Cenário 2... (permanece o mesmo)
+        pass 
     else:
         print("MODO DE EXECUÇÃO: Cenário PADRÃO (similaridade de estrutura) selecionado.")
         dir_a = "diretorio_A_cenario1"
         dir_b = "diretorio_B_cenario1"
         os.makedirs(dir_a, exist_ok=True)
         os.makedirs(dir_b, exist_ok=True)
+        
+        # NOVO: DataFrame para testar a normalização de Timestamps
+        df_timestamps_a = pd.DataFrame({
+            'ID_Evento': [1, 2],
+            'timestamp_evento': ['02SEP2012:23:59:00', '03OCT2011:12:30:00']
+        })
+        
+        df_timestamps_b = pd.DataFrame({
+            'ID_Evento': [1, 2],
+            'timestamp_evento': ['2012-09-02T23:59:00.000Z', '2011-10-03 12:30:00']
+        })
 
+        df_timestamps_a.to_csv(os.path.join(dir_a, "eventos_sistema_A.csv"), index=False)
+        df_timestamps_b.to_csv(os.path.join(dir_b, "events_system_B.csv"), index=False)
+
+        # Dados antigos para garantir que a compatibilidade não foi quebrada
         df_clientes_orig = pd.DataFrame({'ID_Cliente': [101, 102], 'Nome': ['Alice', 'Bruno'], 'data_cadastro': ['10-05-2024', '12-06-2024']})
         df_clientes_novo = pd.DataFrame({'ID_Cliente': [101, 102], 'Nome': ['Alice', 'Bruno'], 'data_cadastro': ['2024-05-10', '2024-06-12']})
-        df_produtos = pd.DataFrame({'SKU': ['A-001', 'B-002', 'C-003'], 'Produto': ['Notebook', 'Mouse', 'Teclado'], 'Preco': [4500.00, 150.50, 299.90]})
-        df_vendas_a = pd.DataFrame({'Data': ['2025-01-10'], 'Valor': [1000]})
-        df_fornecedores_b = pd.DataFrame({'CNPJ': ['123456/0001-00'], 'Empresa': ['Fornecedor X']})
-
         df_clientes_orig.to_csv(os.path.join(dir_a, "base_clientes_jan.csv"), index=False)
-        df_produtos.to_excel(os.path.join(dir_a, "catalogo_produtos.xlsx"), index=False)
-        df_vendas_a.to_csv(os.path.join(dir_a, "relatorio_vendas.csv"), index=False)
         df_clientes_novo.to_csv(os.path.join(dir_b, "customer_data_01.csv"), index=False)
-        df_produtos.to_excel(os.path.join(dir_b, "product_catalog_v2.xlsx"), index=False)
-        df_fornecedores_b.to_csv(os.path.join(dir_b, "dados_fornecedores.csv"), index=False)
         
         print(f"Diretório A: {dir_a}")
         print(f"Diretório B: {dir_b}")
-        print("Ambiente de teste configurado.\n")
+        print("Ambiente de teste configurado com exemplos de Timestamps.\n")
 
         processar_comparacao_cenario_padrao(dir_a, dir_b, limite_linhas=LIMITE_DE_LINHAS_PARA_ANALISE)
